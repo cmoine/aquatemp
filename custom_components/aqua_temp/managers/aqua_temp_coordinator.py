@@ -63,11 +63,12 @@ class AquaTempCoordinator(DataUpdateCoordinator):
 
         entry = self.config_manager.entry
         platforms = self.config_manager.platforms
+
+        await self._api.initialize(throw_error=True)
+
         await self.hass.config_entries.async_forward_entry_setups(entry, platforms)
 
         _LOGGER.info(f"Start loading {DOMAIN} integration, Entry ID: {entry.entry_id}")
-
-        await self._api.initialize()
 
         await self.async_request_refresh()
 

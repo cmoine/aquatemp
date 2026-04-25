@@ -91,33 +91,26 @@ class AquaTempAPI:
         return result
 
     async def initialize(self, throw_error: bool = False):
-        try:
-            _LOGGER.debug(f"Initializing API, Throw Error: {throw_error}")
+        _LOGGER.debug(f"Initializing API, Throw Error: {throw_error}")
 
-            if self._session is None:
-                if self._hass is None:
-                    self._session = ClientSession()
-                else:
-                    self._session = async_create_clientsession(hass=self._hass)
-
-                await self._connect()
-
-        except LoginError as lex:
-            if throw_error:
-                raise lex
-
+        if self._session is None:
+            if self._hass is None:
+                self._session = ClientSession()
             else:
-                _LOGGER.error(
-                    "Failed to login, Please update credentials and try again"
-                )
+                self._session = async_create_clientsession(hass=self._hass)
 
-        except Exception as ex:
-            exc_type, exc_obj, tb = sys.exc_info()
-            line_number = tb.tb_lineno
+        try:
+            await self._connect()
 
-            _LOGGER.warning(
-                f"Failed to initialize session, Error: {ex}, Line: {line_number}"
-            )
+        except LoginError:
+            if throw_error:
+                raise
+            _LOGGER.error("Failed to login, Please update credentials and try again")
+
+        except Exception:
+            if throw_error:
+                raise
+            _LOGGER.warning("Failed to initialize session", exc_info=True)
 
     async def _connect(self):
         if self._token is None:
@@ -169,7 +162,7 @@ class AquaTempAPI:
 
         if error is not None:
             if attempt < API_MAX_ATTEMPTS:
-                await sleep(1000)
+                await sleep(1)
 
                 await self._internal_update(attempt + 1)
 
@@ -485,46 +478,30 @@ class AquaTempAPI:
             device_data["fault"] = fault_description
 
     async def _login(self):
-        try:
-            param_username = self._config_manager.get_api_param(APIParam.Username)
-            param_object_result = self._config_manager.get_api_param(
-                APIParam.ObjectResult
-            )
+        param_username = self._config_manager.get_api_param(APIParam.Username)
+        param_object_result = self._config_manager.get_api_param(APIParam.ObjectResult)
 
-            config_data = self._config_manager.config_data
+        config_data = self._config_manager.config_data
 
-            plain_password = config_data.password
+        password_hashed = hashlib.md5(
+            config_data.password.encode("utf-8")
+        ).hexdigest()
 
-            password_bytes = bytes(plain_password, "utf-8")
+        data = {param_username: config_data.username, "password": password_hashed}
 
-            md5hash = hashlib.new("md5")
-            md5hash.update(password_bytes)
+        login_response = await self._post_request(Endpoints.Login, data)
+        object_result = login_response.get(param_object_result, {})
 
-            password_hashed = md5hash.hexdigest()
+        self._login_details = object_result
 
-            data = {param_username: config_data.username, "password": password_hashed}
+        token = object_result.get(HTTP_HEADER_X_TOKEN)
 
-            login_response = await self._post_request(Endpoints.Login, data)
-            object_result = login_response.get(param_object_result, {})
-
-            self._login_details = object_result
-
-            token = object_result.get(HTTP_HEADER_X_TOKEN)
-
-            self.set_token(token)
-
-            if token is not None:
-                await self._load_user_info()
-
-        except Exception as ex:
-            exc_type, exc_obj, tb = sys.exc_info()
-            line_number = tb.tb_lineno
-
-            _LOGGER.error(f"Failed to login, Error: {ex}, Line: {line_number}")
+        if token is None:
             self.set_token()
-
-        if self._token is None:
             raise LoginError()
+
+        self.set_token(token)
+        await self._load_user_info()
 
     async def _load_user_info(self):
         param_object_result = self._config_manager.get_api_param(APIParam.ObjectResult)
