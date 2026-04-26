@@ -127,49 +127,48 @@ class AquaTempAPI:
         """Fetch new state parameters for the sensor."""
         await self._internal_update()
 
-    async def _internal_update(self, attempt: int = 1):
-        """Fetch new state parameters for the sensor."""
-        error = None
-        line_number = None
+    async def _internal_update(self):
+        """Fetch new state with up to API_MAX_ATTEMPTS retries.
 
-        try:
-            await self._connect()
+        Always clears the token between failed attempts so the next try goes
+        through a full re-login, re-loads user info, and re-loads devices.
+        Without that, a partial failure (e.g. network error after _login set
+        the token but before _load_user_info populated _device_list_request_data)
+        would leave _devices empty and self._token set; subsequent ticks would
+        iterate an empty for-loop, raise no error, and silently report success
+        forever — a "stuck token" state.
 
-            for device_code in self._devices:
-                await self._update_device(device_code)
+        AquaTemp's cloud only allows one active session per credential, so if
+        another client (phone app, second HA) is also logging in with the same
+        account we'll fight an unwinnable war. The README workaround is to use
+        a second account and share the device to it.
+        """
+        last_error: Exception | None = None
+        last_line: int | None = None
 
-        except LoginError as lex:
-            exc_type, exc_obj, tb = sys.exc_info()
-            line_number = tb.tb_lineno
+        for attempt in range(1, API_MAX_ATTEMPTS + 1):
+            try:
+                await self._connect()
 
-            self.set_token()
+                for device_code in self._devices:
+                    await self._update_device(device_code)
 
-            error = lex
+                return
 
-        except InvalidTokenError as itex:
-            exc_type, exc_obj, tb = sys.exc_info()
-            line_number = tb.tb_lineno
+            except Exception as ex:
+                _, _, tb = sys.exc_info()
+                last_line = tb.tb_lineno if tb is not None else None
+                last_error = ex
+                self.set_token()
 
-            self.set_token()
-
-            error = itex
-
-        except Exception as ex:
-            exc_type, exc_obj, tb = sys.exc_info()
-            line_number = tb.tb_lineno
-
-            error = ex
-
-        if error is not None:
             if attempt < API_MAX_ATTEMPTS:
                 await sleep(1)
 
-                await self._internal_update(attempt + 1)
-
-            else:
-                _LOGGER.error(
-                    f"Failed to update (Attempt #{attempt}), Error: {error}, Line: {line_number}"
-                )
+        _LOGGER.error(
+            f"Failed to update after {API_MAX_ATTEMPTS} attempts, "
+            f"Error: {last_error}, Line: {last_line}"
+        )
+        raise last_error
 
     async def _update_device(self, device_code: str):
         _LOGGER.debug(f"Starting to update device: {device_code}")
