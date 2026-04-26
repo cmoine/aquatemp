@@ -13,6 +13,7 @@ from ..common.consts import (
     DOMAIN,
     UPDATE_API_INTERVAL,
 )
+from ..models.exceptions import LoginError
 from .aqua_temp_api import AquaTempAPI
 from .aqua_temp_config_manager import AquaTempConfigManager
 
@@ -59,12 +60,32 @@ class AquaTempCoordinator(DataUpdateCoordinator):
         await self.initialize()
 
     async def initialize(self):
+        """Initialize the integration.
+
+        LoginError (bad credentials) is allowed to propagate so async_setup_entry
+        can mark the integration as failed and surface a re-auth prompt to the
+        user. Any other exception (DNS timeout, transient network error, AquaTemp
+        cloud blip) is caught and logged so platform setup still proceeds — the
+        coordinator's regular 5-min update tick will retry the login. Without
+        this, a brief network hiccup at HA boot leaves the integration
+        permanently broken until a manual reload.
+        """
         _LOGGER.debug("Initializing coordinator")
 
         entry = self.config_manager.entry
         platforms = self.config_manager.platforms
 
-        await self._api.initialize(throw_error=True)
+        try:
+            await self._api.initialize(throw_error=True)
+
+        except LoginError:
+            raise
+
+        except Exception as ex:
+            _LOGGER.warning(
+                f"Initial API connect failed; coordinator will retry on next "
+                f"update. Error: {ex}"
+            )
 
         await self.hass.config_entries.async_forward_entry_setups(entry, platforms)
 
