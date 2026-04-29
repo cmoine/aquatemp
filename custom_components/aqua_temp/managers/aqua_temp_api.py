@@ -553,6 +553,48 @@ class AquaTempAPI:
 
                 _LOGGER.info(f"Discovering device {device_code}")
 
+        if not self._devices:
+            await self._load_devices_unfiltered(param_object_result)
+
+    async def _load_devices_unfiltered(self, param_object_result):
+        param_product_ids = self._config_manager.get_api_param(APIParam.ProductIds)
+
+        _LOGGER.warning(
+            "No devices matched the PRODUCT_IDS allow-list — retrying device discovery without productIds filter"
+        )
+
+        for device_list_url in DEVICE_LISTS:
+            request_data = {
+                k: v
+                for k, v in self._device_list_request_data[device_list_url].items()
+                if k != param_product_ids
+            }
+
+            try:
+                device_code_response = await self._post_request(
+                    device_list_url, request_data
+                )
+            except Exception as ex:
+                _LOGGER.debug(
+                    f"Unfiltered discovery to {device_list_url} failed: {ex}"
+                )
+                continue
+
+            devices = device_code_response.get(param_object_result, [])
+
+            for device in devices:
+                device_code = self._get_device_id(device)
+                product_id = self._get_device_product_id(device)
+
+                _LOGGER.warning(
+                    f"Unfiltered discovery: device {device_code} productId={product_id} (not in PRODUCT_IDS allow-list)"
+                )
+                _LOGGER.debug(
+                    f"Discover device: {device_code} by {device_list_url}, Data: {device}"
+                )
+
+                self._devices[device_code] = device
+
     async def _post_request(
         self, endpoint: Endpoints, data: dict | list | None = None
     ) -> dict | None:
